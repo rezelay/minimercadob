@@ -11,10 +11,11 @@ permissions:
   contents: read
 
 env:
-  ACR_NAME: acrseminario18847
+  # Public image on GHCR: Azure for Students only allows Container Apps "express"
+  # environments, which can't pull from ACR with a managed identity.
+  IMAGE: ghcr.io/${{ github.repository }}
   RESOURCE_GROUP: rg-seminario-devsecops
   APP_NAME: app-seminario
-  IMAGE_NAME: app
   APP_PORT: 3000 # EXPOSE in the Dockerfile
 
 jobs:
@@ -45,39 +46,36 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 3) Build + image scan + push
+  # 3) Build + image scan + push to GHCR
   build-scan-push:
     needs: [lint-test, secret-scan]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR with GITHUB_TOKEN
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build image
-        run: docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+        run: docker build -t ${{ env.IMAGE }}:${{ github.sha }} .
 
       - name: Trivy - image vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
 
-      - name: Azure login (OIDC)
+      - name: Push to GHCR
         if: github.event_name == 'push'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push to ACR
-        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          az acr login --name ${{ env.ACR_NAME }}
-          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
 
-  # 4) Deploy (main only, never on PRs)
+  # 4) Deploy (main only, never on PRs, after manual approval)
   deploy:
     needs: build-scan-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -92,8 +90,10 @@ jobs:
 
       - name: Deploy to Container Apps
         run: |
-          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # Port first: the new image listens on APP_PORT, so its revision must
+          # not be health-checked on the placeholder's port 80.
           az containerapp ingress update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
             --target-port ${{ env.APP_PORT }}
+          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.IMAGE }}:${{ github.sha }}
           echo "URL: https://$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)"
