@@ -1,0 +1,48 @@
+name: Deploy
+
+# Runs after "DevSecOps CI" finishes on main. PR branches never trigger it,
+# so no skipped deploy shows up in pull request checks.
+on:
+  workflow_run:
+    workflows: ["DevSecOps CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write # required for OIDC login
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  RESOURCE_GROUP: rg-seminario-devsecops
+  APP_NAME: app-seminario
+  APP_PORT: 3000 # EXPOSE in the Dockerfile
+
+jobs:
+  deploy:
+    # Only a successful CI run from a push to this repo (the one that pushed
+    # the image) — never a fork's branch that happens to be named main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        env:
+          TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # Port first: the new image listens on APP_PORT, so its revision must
+          # not be health-checked on the placeholder's port 80.
+          az containerapp ingress update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
+            --target-port ${{ env.APP_PORT }}
+          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.IMAGE }}:$TAG
+          echo "URL: https://$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)"
