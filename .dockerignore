@@ -1,10 +1,16 @@
-__pycache__
+**/__pycache__
+**/*.pyc
 .pytest_cache
 .ruff_cache
 .venv
 venv
 .git
+.github
 .env
 data/*.db
 dist
 build
+tests
+docs
+Dockerfile
+.dockerignore
