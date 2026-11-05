@@ -1,4 +1,4 @@
-name: DevSecOps - Build, Scan & Deploy
+name: DevSecOps CI
 
 on:
   push:
@@ -7,16 +7,12 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write # required for OIDC login
   contents: read
 
 env:
   # Public image on GHCR: Azure for Students only allows Container Apps "express"
   # environments, which can't pull from ACR with a managed identity.
   IMAGE: ghcr.io/${{ github.repository }}
-  RESOURCE_GROUP: rg-seminario-devsecops
-  APP_NAME: app-seminario
-  APP_PORT: 3000 # EXPOSE in the Dockerfile
 
 jobs:
   # 1) Lint + tests
@@ -46,7 +42,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 3) Build + image scan + push to GHCR
+  # 3) Build + image scan; push to GHCR only on main
   build-scan-push:
     needs: [lint-test, secret-scan]
     runs-on: ubuntu-latest
@@ -74,26 +70,3 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker push ${{ env.IMAGE }}:${{ github.sha }}
-
-  # 4) Deploy (main only, never on PRs, after manual approval)
-  deploy:
-    needs: build-scan-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy to Container Apps
-        run: |
-          # Port first: the new image listens on APP_PORT, so its revision must
-          # not be health-checked on the placeholder's port 80.
-          az containerapp ingress update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
-            --target-port ${{ env.APP_PORT }}
-          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.IMAGE }}:${{ github.sha }}
-          echo "URL: https://$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)"
