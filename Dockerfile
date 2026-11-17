@@ -24,7 +24,10 @@ RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p data \
     && chown appuser:appuser data
 
-RUN apt update && apt upgrade 
+# Atualiza pacotes do Debian (ex.: zlib1g -> 1:1.3.dfsg+really1.3.1-1+deb13u1) para corrigir CVEs apontadas pelo Trivy
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /install /usr/local
 COPY --from=builder --chown=appuser:appuser /app /app
