@@ -32,6 +32,7 @@ jobs:
 
   # 2) Secrets leaked in the code
   secret-scan:
+    needs: lint-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,3 +71,24 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker push ${{ env.IMAGE }}:${{ github.sha }}
+  deploy:
+    needs: build-scan-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        run: |
+          # Port first: the new image listens on APP_PORT, so its revision must
+          # not be health-checked on the placeholder's port 80.
+          az containerapp ingress update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
+            --target-port ${{ env.APP_PORT }}
+          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.IMAGE }}:${{ github.sha }}
+          echo "URL: https://$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RESOURCE_GROUP }} --query properties.configuration.ingress.fqdn -o tsv)"
