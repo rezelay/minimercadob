@@ -24,6 +24,8 @@ RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p data \
     && chown appuser:appuser data
 
+RUN apk update && apk upgrade --update-cache
+
 COPY --from=builder /install /usr/local
 COPY --from=builder --chown=appuser:appuser /app /app
 
